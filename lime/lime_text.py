@@ -313,7 +313,8 @@ class LimeTextExplainer(object):
                  bow=True,
                  mask_string=None,
                  random_state=None,
-                 char_level=False):
+                 char_level=False,
+                 lang="en"):
         """Init function.
 
         Args:
@@ -364,6 +365,19 @@ class LimeTextExplainer(object):
         self.mask_string = mask_string
         self.split_expression = split_expression
         self.char_level = char_level
+        self.lang = lang
+
+        # after parsing args in __init__, before using split_expression
+        if self.lang == "jp" and not char_level:
+            try:
+                from .japanese import mecab_unidic_split, active_japanese_tokenizer
+                if active_japanese_tokenizer() == 'fallback':
+                    raise ImportError()
+                self.split_expression = mecab_unidic_split
+            except ImportError:
+                raise ImportError(
+                    "Install SudachiPy to use language='jp': pip install sudachipy"
+                )
 
     def explain_instance(self,
                          text_instance,
@@ -432,6 +446,78 @@ class LimeTextExplainer(object):
                 model_regressor=model_regressor,
                 feature_selection=self.feature_selection)
         return ret_exp
+
+    def explain_instance_plain_text(self, exp, label=None, n_words=3):
+        """Generate a short plain-English summary for a text explanation.
+
+        Args:
+            exp: an Explanation object returned by `explain_instance`.
+            label: integer label index or label name. If None, use top label from
+                the explanation (if available) or 0.
+            n_words: number of top words to include in the summary.
+
+        Returns:
+            str: A one-sentence English summary describing the label and its
+                 most important words.
+        """
+        # Determine label index
+        if label is None:
+            if hasattr(exp, 'top_labels') and getattr(exp, 'top_labels'):
+                label_idx = exp.top_labels[0]
+            else:
+                label_idx = 0
+        else:
+            # allow passing label name or index
+            if isinstance(label, int):
+                label_idx = label
+            else:
+                try:
+                    label_idx = exp.class_names.index(label)
+                except Exception:
+                    try:
+                        label_idx = int(label)
+                    except Exception:
+                        label_idx = 0
+
+        # Retrieve local explanation for the label
+        features = []
+        try:
+            features = exp.local_exp.get(label_idx, []) if isinstance(exp.local_exp, dict) else exp.local_exp[label_idx]
+        except Exception:
+            # fallback: try to access as attribute or index
+            try:
+                features = exp.local_exp[label_idx]
+            except Exception:
+                features = []
+
+        # Keep top n_words by absolute weight
+        if features:
+            try:
+                # features is list of (feature_id, weight)
+                features_sorted = sorted(features, key=lambda x: -abs(x[1]))[:n_words]
+            except Exception:
+                features_sorted = features[:n_words]
+        else:
+            features_sorted = []
+
+        # Map feature ids to words using the domain mapper
+        words = []
+        try:
+            mapped = exp.domain_mapper.map_exp_ids(features_sorted, positions=False)
+            words = [w for w, _ in mapped]
+        except Exception:
+            try:
+                words = [str(x[0]) for x in features_sorted]
+            except Exception:
+                words = []
+
+        label_name = exp.class_names[label_idx] if getattr(exp, 'class_names', None) is not None else str(label_idx)
+
+        if len(words) == 0:
+            return f"In this text, the model {label_name} did not return any explanatory words."
+
+        quoted = ', '.join(words)
+        return f'In this text, the overall probability we can see that the model {label_name} is characterized by the words such as "{quoted}".'
 
     def __data_labels_distances(self,
                                 indexed_string,
