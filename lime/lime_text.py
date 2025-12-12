@@ -371,13 +371,11 @@ class LimeTextExplainer(object):
         if self.lang == "jp" and not char_level:
             try:
                 from .japanese import mecab_unidic_split, active_japanese_tokenizer
-                if active_japanese_tokenizer() == 'fallback':
-                    raise ImportError()
+                # Use Sudachi when available; otherwise allow fallback tokens
                 self.split_expression = mecab_unidic_split
-            except ImportError:
-                raise ImportError(
-                    "Install SudachiPy to use language='jp': pip install sudachipy"
-                )
+            except Exception:
+                # Keep regex split if japanese package import fails
+                pass
 
     def explain_instance(self,
                          text_instance,
@@ -567,5 +565,130 @@ class LimeTextExplainer(object):
             data[i, inactive] = 0
             inverse_data.append(indexed_string.inverse_removing(inactive))
         labels = classifier_fn(inverse_data)
+        # Ensure labels are a numpy array of shape (num_samples, n_classes)
+        labels = np.asarray(labels)
         distances = distance_fn(sp.sparse.csr_matrix(data))
         return data, labels, distances
+
+
+def generate_sentence_for_feature(word, weight, class_name):
+    """
+    Converts a single LIME word-weight pair into a natural-language sentence.
+    """
+    direction = "increased" if weight > 0 else "decreased"
+    weight_abs = abs(weight)
+
+    if weight_abs > 0.10:
+        strength = "strongly"
+    elif weight_abs > 0.05:
+        strength = "moderately"
+    else:
+        strength = "slightly"
+
+    return (
+        f'The word "{word}" {strength} {direction} '
+        f'the predicted probability of {class_name} (weight = {weight:.3f}).'
+    )
+
+
+def summarize_lime_explanation(explanation_obj, class_idx=1):
+    """
+    Takes a LIME explanation object and returns a list of natural-language sentences.
+    Works with LimeTextExplainer().
+    """
+    # Extract the explanation for the class of interest
+    try:
+        exp_list = explanation_obj.as_list(label=class_idx)
+    except Exception:
+        # Fallback: build list from local_exp
+        local = explanation_obj.local_exp.get(class_idx, []) if isinstance(explanation_obj.local_exp, dict) else explanation_obj.local_exp[class_idx]
+        # Map ids to words using the domain mapper
+        mapped = explanation_obj.domain_mapper.map_exp_ids(local, positions=False)
+        exp_list = mapped
+
+    sentences = []
+    class_names = getattr(explanation_obj, 'class_names', None)
+    class_name = class_names[class_idx] if class_names and class_idx < len(class_names) else str(class_idx)
+
+    # Generate sentence per feature
+    for word, weight in exp_list:
+        sentences.append(generate_sentence_for_feature(word, weight, class_name))
+
+    if not exp_list:
+        return sentences
+
+    # Summary overview sentence
+    highest_word, highest_weight = max(exp_list, key=lambda x: abs(x[1]))
+    overview_sentence = (
+        f'Overall, "{highest_word}" had the largest impact on the prediction '
+        f'with a weight of {highest_weight:.3f}, making it the most influential term.'
+    )
+
+    return [overview_sentence] + sentences
+
+
+def print_lime_narrative(explanation_obj, class_idx=1):
+    """
+    Prints a clean, readable explanation block.
+    """
+    narrative = summarize_lime_explanation(explanation_obj, class_idx=class_idx)
+
+    print("\nNatural-Language Explanation of LIME Output")
+    print("--------------------------------------------------")
+    for sent in narrative:
+        print("• " + sent)
+
+
+def generate_sentence_for_feature_jp(word, weight, class_name):
+    """日本語の1特徴語と重みから、自然言語の文を生成します。"""
+    direction = "上げました" if weight > 0 else "下げました"
+    weight_abs = abs(weight)
+
+    if weight_abs > 0.10:
+        strength = "大きく"
+    elif weight_abs > 0.05:
+        strength = "中程度に"
+    else:
+        strength = "わずかに"
+
+    return (
+        f'単語「{word}」は{strength}{direction} '
+        f'クラス「{class_name}」の予測確率（重み = {weight:.3f}）。'
+    )
+
+
+def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
+    """LIMEの説明オブジェクトから日本語の要約文リストを生成します。"""
+    try:
+        exp_list = explanation_obj.as_list(label=class_idx)
+    except Exception:
+        local = explanation_obj.local_exp.get(class_idx, []) if isinstance(explanation_obj.local_exp, dict) else explanation_obj.local_exp[class_idx]
+        mapped = explanation_obj.domain_mapper.map_exp_ids(local, positions=False)
+        exp_list = mapped
+
+    sentences = []
+    class_names = getattr(explanation_obj, 'class_names', None)
+    class_name = class_names[class_idx] if class_names and class_idx < len(class_names) else str(class_idx)
+
+    for word, weight in exp_list:
+        sentences.append(generate_sentence_for_feature_jp(word, weight, class_name))
+
+    if not exp_list:
+        return sentences
+
+    highest_word, highest_weight = max(exp_list, key=lambda x: abs(x[1]))
+    overview_sentence = (
+        f'全体として、単語「{highest_word}」が最も影響が大きく、重みは {highest_weight:.3f} でした。'
+    )
+
+    return [overview_sentence] + sentences
+
+
+def print_lime_narrative_jp(explanation_obj, class_idx=1):
+    """日本語の説明ブロックを整形して出力します。"""
+    narrative = summarize_lime_explanation_jp(explanation_obj, class_idx=class_idx)
+
+    print("\nLIME出力の自然言語による説明")
+    print("--------------------------------------------------")
+    for sent in narrative:
+        print("・ " + sent)

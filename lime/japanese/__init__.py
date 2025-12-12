@@ -5,7 +5,6 @@ modules. Users can import `lime.japanese` when they need Japanese-specific
 functionality.
 """
 
-from .splitters import mecab_unidic_split  # type: ignore
-from .tokenizers import has_fugashi  # type: ignore
+from .splitters import split as mecab_unidic_split, active_japanese_tokenizer  # type: ignore
 
-__all__ = ["mecab_unidic_split", "has_fugashi"]
+__all__ = ["mecab_unidic_split", "active_japanese_tokenizer"]
