@@ -8,24 +8,26 @@ from .tokenizers import _SUDACHI_TOKENIZER, _SUDACHI_MODE, has_sudachi
 
 
 def active_japanese_tokenizer():
-    """Return which Japanese tokenizer backend is active: 'sudachi' or 'fallback'."""
-    if has_sudachi():
-        return 'sudachi'
-    return 'fallback'
+    """Return which Japanese tokenizer backend is active: 'sudachi' or 'fallback'.
+
+    Returns 'sudachi' only when SudachiPy is installed and its dictionary
+    can be created successfully; otherwise returns 'fallback'.
+    """
+    return 'sudachi' if has_sudachi() else 'fallback'
 
 
-def mecab_unidic_split(text):
+def split(text):
     """Split Japanese text using Sudachi when available, else a simple fallback.
 
     Note: despite the name, this now uses Sudachi for tokenization to avoid
     external dictionary management. The API remains the same.
     """
-    if has_sudachi():
-        # Sudachi returns morphemes; use surface() to get token strings
-        return [m.surface() for m in _SUDACHI_TOKENIZER.tokenize(text, _SUDACHI_MODE)]
+    if not has_sudachi():
+        # Simple fallback: return non-space characters as tokens.
+        return [ch for ch in text if not ch.isspace()]
 
-    # Simple fallback: return non-space characters as tokens.
-    return [ch for ch in text if not ch.isspace()]
+    # Sudachi returns morphemes; use surface() to get token strings
+    return [m.surface() for m in _SUDACHI_TOKENIZER.tokenize(text, _SUDACHI_MODE)]
 
 
-__all__ = ["mecab_unidic_split", "active_japanese_tokenizer"]
+__all__ = ["split", "active_japanese_tokenizer"]

@@ -17,10 +17,13 @@ setup(name='lime',
           'scikit-learn>=0.18',
           'scikit-image>=0.12',
           'pyDOE2==1.3.0',
-          'janome'
       ],
       extras_require={
           'dev': ['pytest', 'flake8'],
+          'jp': [
+              'sudachipy',
+              'sudachidict_core'
+          ],
       },
       include_package_data=True,
       zip_safe=False)
