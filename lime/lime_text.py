@@ -751,14 +751,23 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
                 take.append((w, wt))
         return take[:n]
 
+    # Select top features for the predicted and runner-up classes
+    top3_1 = _top_features(mapped_1, 3)
+    next3_1 = _next_features(mapped_1, top3_1, 3)
+    top3_2 = _top_features(mapped_2, 3)
+
     # If any lists are still short (e.g., very few features), pad with token strings from the document to avoid dashes
     def _pad_with_vocab(items, indexed_list, n):
         if len(items) >= n:
             return items
-        if not indexed_list:
-            return items
-        # collect unique tokens from mapped list order by appearance
-        vocab_tokens = [w for (w, _) in indexed_list]
+        # If we have mapped tokens, use them; otherwise, fall back to raw document tokens
+        vocab_tokens = [w for (w, _) in indexed_list] if indexed_list else []
+        if not vocab_tokens:
+            try:
+                raw_tokens = explanation_obj.domain_mapper.indexed_string.inverse_vocab
+                vocab_tokens = [t for t in raw_tokens if isinstance(t, str) and t.strip()]
+            except Exception:
+                vocab_tokens = []
         used = set(w for w, _ in items)
         for w in vocab_tokens:
             if len(items) >= n:
@@ -766,11 +775,20 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
             if w in used:
                 continue
             items.append((w, 0.0))
+        # If still short, pad with any non-space characters from the raw string as last resort
+        if len(items) < n:
+            try:
+                raw_chars = [ch for ch in explanation_obj.domain_mapper.indexed_string.raw_string() if not ch.isspace()]
+                for ch in raw_chars:
+                    if len(items) >= n:
+                        break
+                    if ch in used:
+                        continue
+                    items.append((ch, 0.0))
+                    used.add(ch)
+            except Exception:
+                pass
         return items
-
-    top3_1 = _top_features(mapped_1, 3)
-    next3_1 = _next_features(mapped_1, top3_1, 3)
-    top3_2 = _top_features(mapped_2, 3)
 
     # Use mapped lists themselves as token sources for padding
     top3_1 = _pad_with_vocab(top3_1, mapped_1, 3)

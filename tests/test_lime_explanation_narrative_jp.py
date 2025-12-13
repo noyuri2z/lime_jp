@@ -1,5 +1,9 @@
-import pytest
+"""
+explanation narrative tests for Japanese text data.
+日本語の説明文が正しく生成されるかのテスト。
+"""
 
+import pytest
 from lime.lime_text import LimeTextExplainer
 
 class DummyClassifierJP:
