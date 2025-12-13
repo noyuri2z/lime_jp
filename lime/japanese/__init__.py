@@ -1,10 +1,17 @@
-"""Japanese-specific text processing utilities for LIME.
+"""
+Japanese-specific text processing utilities for LIME.
 
 Export a small, stable API and keep implementation details in separate
 modules. Users can import `lime.japanese` when they need Japanese-specific
 functionality.
+
+日本語でLIMEを使用する際にのみ必要な機能をまとめたファイル。
+
 """
 
-from .splitters import split as mecab_unidic_split, active_japanese_tokenizer  # type: ignore
+from .splitters import split as splitter, active_japanese_tokenizer  # type: ignore
 
-__all__ = ["mecab_unidic_split", "active_japanese_tokenizer"]
+__all__ = [
+    "splitter",
+    "active_japanese_tokenizer",
+]

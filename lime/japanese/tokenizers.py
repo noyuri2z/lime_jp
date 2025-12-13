@@ -1,7 +1,10 @@
-"""Singleton tokenizer instances for Japanese processing.
+"""
+Singleton tokenizer instances for Japanese processing.
+Use Sudachi. The tokenizer is instantiated once at import for performance.
 
-Use Sudachi (Python bindings) to avoid external MeCab/UniDic setup.
-The tokenizer is instantiated once at import for performance.
+日本語データの処理のためのシングルトントークナイザー。
+Sudachiを使用。パフォーマンス向上のため、インポート時に一度だけインスタンス化されます。
+
 """
 
 try:
@@ -17,7 +20,10 @@ except Exception:
 
 
 def has_sudachi():
-    """Return True if the Sudachi tokenizer was successfully initialized."""
+    """
+    Return True if the Sudachi tokenizer was successfully initialized.
+    Sudachiのトークナイザーがインストールされているか確認する機能。
+    """
     return _SUDACHI_TOKENIZER is not None
 
 
