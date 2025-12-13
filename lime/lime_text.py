@@ -693,26 +693,21 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
 
     # --- 修正箇所: 対立クラスから重みを補完するロジックを追加 ---
     def _get_feats(idx):
-        try:
-            local_exp = explanation_obj.local_exp
-            # 辞書として取得を試みる
-            feats = local_exp.get(idx, []) if isinstance(local_exp, dict) else local_exp[idx]
-            if feats:
-                return feats
+        local_exp = explanation_obj.local_exp
+        # 辞書として取得を試みる
+        feats = local_exp.get(idx, []) if isinstance(local_exp, dict) else local_exp[idx]
+        if feats:
+            return feats
             
-            # 2値分類の場合のフォールバック: 
-            # ターゲットのクラス(idx)が無い場合、もう一方のクラスの重みを反転して利用する
-            if class_names and len(class_names) == 2:
-                available_keys = list(local_exp.keys())
-                if len(available_keys) == 1:
-                    other_idx = available_keys[0]
-                    if other_idx != idx:
-                        # 重みを反転させる (weight * -1)
-                        return [(fid, -weight) for fid, weight in local_exp[other_idx]]
-            return []
-        except Exception:
-            return []
-    # -------------------------------------------------------
+        # 2値分類の場合のフォールバック: 
+        # ターゲットのクラス(idx)が無い場合、もう一方のクラスの重みを反転して利用する
+        if class_names and len(class_names) == 2:
+            available_keys = list(local_exp.keys())
+            if len(available_keys) == 1:
+                other_idx = available_keys[0]
+                if other_idx != idx:
+                     # 重みを反転させる (weight * -1)
+                    return [(fid, -weight) for fid, weight in local_exp[other_idx]]
 
     feats_1 = _get_feats(class_1_idx)
     feats_2 = _get_feats(class_2_idx)
@@ -779,17 +774,30 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
     next3_1 = _pad_list(next3_1, 3)
     top3_2 = _pad_list(top3_2, 3)
 
+    # 重みの表示を符号付き・強度ラベル付きに変更
+    t1w0 = _format_weight_jp(top3_1[0][1])
+    t1w1 = _format_weight_jp(top3_1[1][1])
+    t1w2 = _format_weight_jp(top3_1[2][1])
+
+    n1w0 = _format_weight_jp(next3_1[0][1])
+    n1w1 = _format_weight_jp(next3_1[1][1])
+    n1w2 = _format_weight_jp(next3_1[2][1])
+
+    t2w0 = _format_weight_jp(top3_2[0][1])
+    t2w1 = _format_weight_jp(top3_2[1][1])
+    t2w2 = _format_weight_jp(top3_2[2][1])
+
     sent1 = (
         f"このインスタンスは{p0:.3f}対{p1:.3f}で{class_1}と分類されました。"
         f"{class_1}への分類に最も強い影響を与えた言葉は{top3_1[0][0]}, {top3_1[1][0]}, {top3_1[2][0]}で、"
-        f"それぞれの重みは{top3_1[0][1]:.3f}, {top3_1[1][1]:.3f}, {top3_1[2][1]:.3f}となっています。"
+        f"それぞれの{t1w0}, {t1w1}, {t1w2}となっています。"
     )
 
     sent2 = (
-        f"他に{class_1}への分類の確率を上げた言葉として{next3_1[0][0]} (重み = {next3_1[0][1]:.3f})、"
-        f"{next3_1[1][0]} (重み = {next3_1[1][1]:.3f})、{next3_1[2][0]} (重み = {next3_1[2][1]:.3f})などが挙げられます。"
-        f"{class_2}への分類への確率を上げた言葉として、{top3_2[0][0]} (重み = {top3_2[0][1]:.3f})、"
-        f"{top3_2[1][0]} (重み = {top3_2[1][1]:.3f})、{top3_2[2][0]} (重み = {top3_2[2][1]:.3f})などが挙げられます。"
+        f"他に{class_1}への分類の確率を上げた言葉として{next3_1[0][0]} ({n1w0})、"
+        f"{next3_1[1][0]} ({n1w1})、{next3_1[2][0]} ({n1w2})などが挙げられます。"
+        f"{class_2}への分類への確率を上げた言葉として、{top3_2[0][0]} ({t2w0})、"
+        f"{top3_2[1][0]} ({t2w1})、{top3_2[2][0]} ({t2w2})などが挙げられます。"
     )
 
     return [sent1, sent2]
@@ -805,3 +813,18 @@ def print_lime_narrative_jp(explanation_obj, class_idx=1):
     print("--------------------------------------------------")
     for sent in narrative:
         print("・ " + sent)
+
+def _format_weight_jp(wt: float) -> str:
+    """日本語表示用に重みを符号付きと強度ラベルで整形します。
+    例: 重み=+0.037（強）
+    強度のしきい値: |w|>0.10=強, >0.05=中, それ以下=弱
+    """
+    sign = '+' if wt > 0 else ('-' if wt < 0 else '')
+    abs_w = abs(wt)
+    if abs_w > 0.10:
+        strength = '強'
+    elif abs_w > 0.05:
+        strength = '中'
+    else:
+        strength = '弱'
+    return f"重み={sign}{abs_w:.3f}（{strength}）"
