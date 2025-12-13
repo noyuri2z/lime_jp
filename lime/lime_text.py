@@ -676,7 +676,7 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
     # Ensure probabilities are a 1-D numpy array
     probs = np.asarray(probs).ravel()
 
-    # Determine the predicted class (class_1) and the runner-up (class_2)
+    # class_1 は最も高い確率の予測クラス、class_2 は次点
     class_1_idx = int(np.argmax(probs))
     
     if probs.size > 1:
@@ -691,33 +691,28 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
     p0 = float(probs[class_1_idx])
     p1 = float(probs[class_2_idx])
 
-    # --- FIX START ---
+    # --- 修正箇所: 対立クラスから重みを補完するロジックを追加 ---
     def _get_feats(idx):
-        """
-        Retrieves features for a given class index.
-        If features for 'idx' are missing but we have features for the opposing class
-        (in a binary classification setting), we derive them by negating weights.
-        """
         try:
             local_exp = explanation_obj.local_exp
-            # Try getting features directly
+            # 辞書として取得を試みる
             feats = local_exp.get(idx, []) if isinstance(local_exp, dict) else local_exp[idx]
             if feats:
                 return feats
             
-            # Fallback for binary cases: if target idx is missing, check for the other label
-            # If we have 2 classes, and explanations for the 'other' class exist:
-            # Weight for class A = -1 * Weight for class B
+            # 2値分類の場合のフォールバック: 
+            # ターゲットのクラス(idx)が無い場合、もう一方のクラスの重みを反転して利用する
             if class_names and len(class_names) == 2:
                 available_keys = list(local_exp.keys())
                 if len(available_keys) == 1:
                     other_idx = available_keys[0]
                     if other_idx != idx:
-                        # Return features with negated weights
+                        # 重みを反転させる (weight * -1)
                         return [(fid, -weight) for fid, weight in local_exp[other_idx]]
             return []
         except Exception:
             return []
+    # -------------------------------------------------------
 
     feats_1 = _get_feats(class_1_idx)
     feats_2 = _get_feats(class_2_idx)
@@ -735,24 +730,22 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
     mapped_1 = _map(feats_1)
     mapped_2 = _map(feats_2)
 
-    # Helper to select top positive features, backfilling with strongest absolute weights if needed
+    # 上位の特徴量を選択するヘルパー関数
     def _select_features(mapped_feats, n=3, exclude_words=None):
         if not mapped_feats:
             return []
         if exclude_words is None:
             exclude_words = set()
             
-        # Filter out excluded words
         candidates = [(w, wt) for w, wt in mapped_feats if w not in exclude_words]
         
-        # Priority 1: Positive contributions (weights > 0)
+        # 優先度1: 確率を上げた（重みが正の）単語を絶対値の大きい順に
         positives = sorted([(w, wt) for w, wt in candidates if wt > 0], key=lambda x: -abs(x[1]))
         
         if len(positives) >= n:
             return positives[:n]
         
-        # Priority 2: Fill remainder with strongest absolute weights (could be negative)
-        # Sort all candidates by absolute weight
+        # 優先度2: 足りない場合は、残りの単語から絶対値が大きいものを埋める（負の重みも含む可能性あり）
         all_sorted = sorted(candidates, key=lambda x: -abs(x[1]))
         
         result = list(positives)
@@ -767,22 +760,16 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
                 
         return result
 
-    # Select features for the sentences
+    # 文生成用に特徴量を選択（top3 + next3）
     top3_1 = _select_features(mapped_1, n=3)
     
-    # For "next 3", exclude words already picked in top3_1
     exclude_for_next = set(w for w, _ in top3_1)
     next3_1 = _select_features(mapped_1, n=3, exclude_words=exclude_for_next)
     
     top3_2 = _select_features(mapped_2, n=3)
 
-    # Padding helper to ensure we don't crash or show empty strings
+    # 表示用にリストを埋める（要素が足りない場合のパディング）
     def _pad_list(items, n=3):
-        # If we have enough items, just return them
-        if len(items) >= n:
-            return items[:n]
-            
-        # If short, pad with placeholders to avoid index errors or empty outputs
         padded = list(items)
         while len(padded) < n:
             padded.append(("-", 0.0))
