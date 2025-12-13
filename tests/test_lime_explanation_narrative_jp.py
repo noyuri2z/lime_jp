@@ -2,16 +2,6 @@ import pytest
 
 from lime.lime_text import LimeTextExplainer
 
-# Try importing Japanese splitter backend to decide skip
-try:
-    from lime.japanese.splitters import active_japanese_tokenizer
-    HAS_JP = active_japanese_tokenizer() != 'fallback'
-except Exception:
-    HAS_JP = False
-
-# Removed skip to always run the test
-
-
 class DummyClassifierJP:
     def predict_proba(self, texts):
         # Very simple: boost class 1 if text contains '良い' or '最高'

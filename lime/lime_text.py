@@ -370,9 +370,9 @@ class LimeTextExplainer(object):
         # after parsing args in __init__, before using split_expression
         if self.lang == "jp" and not char_level:
             try:
-                from .japanese import mecab_unidic_split, active_japanese_tokenizer
-                # Use Sudachi when available; otherwise allow fallback tokens
-                self.split_expression = mecab_unidic_split
+                from .japanese import splitter, active_japanese_tokenizer
+                # Use Sudachi-based splitter when available; otherwise fallback handled inside
+                self.split_expression = splitter
             except Exception:
                 # Keep regex split if japanese package import fails
                 pass
@@ -640,7 +640,12 @@ def print_lime_narrative(explanation_obj, class_idx=1):
 
 
 def generate_sentence_for_feature_jp(word, weight, class_name):
-    """日本語の1特徴語と重みから、自然言語の文を生成します。"""
+    """
+    日本語の1特徴語と重みから、自然言語の文を生成します。
+    Generates a Japanese sentence using the weight calculated for
+    each word in the text_instance.
+    """
+
     direction = "上げました" if weight > 0 else "下げました"
     weight_abs = abs(weight)
 
@@ -658,15 +663,29 @@ def generate_sentence_for_feature_jp(word, weight, class_name):
 
 
 def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
-    """LIMEの説明オブジェクトから日本語のプレーン文を生成します。"""
+    """
+    LIMEの説明オブジェクトから日本語のプレーン文を生成します。
+    Generates a Japanese sentence summary using the values calculated 
+    in the LIME explainer object. 
+    """
     probs = getattr(explanation_obj, 'predict_proba', None)
     class_names = getattr(explanation_obj, 'class_names', None)
     if probs is None:
         return ["予測確率が取得できませんでした。"]
 
-    order = np.argsort(probs)
-    class_1_idx = int(order[-1])
-    class_2_idx = int(order[-2]) if len(probs) > 1 else (1 - class_1_idx)
+    # Ensure probabilities are a 1-D numpy array
+    probs = np.asarray(probs).ravel()
+
+    # class_1 は最も高い確率の予測クラス、class_2 は次点
+    class_1_idx = int(np.argmax(probs))
+    # 次点のクラスを安全に選ぶ（同率や2クラスの場合も考慮）
+    if probs.size > 1:
+        # 降順に並べたインデックス
+        order = np.argsort(probs)[::-1]
+        # 1番目は class_1、2番目があればそれを class_2 に、なければ補完
+        class_2_idx = int(order[1]) if order.size > 1 else (1 - class_1_idx)
+    else:
+        class_2_idx = 1 - class_1_idx
 
     class_1 = class_names[class_1_idx] if class_names else str(class_1_idx)
     class_2 = class_names[class_2_idx] if class_names else str(class_2_idx)
@@ -695,18 +714,70 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
     mapped_1 = _map(feats_1)
     mapped_2 = _map(feats_2)
 
-    pos_1 = sorted([(w, wt) for (w, wt) in mapped_1 if wt > 0], key=lambda x: -abs(x[1]))
-    pos_2 = sorted([(w, wt) for (w, wt) in mapped_2 if wt > 0], key=lambda x: -abs(x[1]))
+    # Prefer positively-weighted features; if insufficient, backfill with highest-absolute-weight features
+    def _top_features(mapped, n):
+        if not mapped:
+            return []
+        pos = sorted([(w, wt) for (w, wt) in mapped if wt > 0], key=lambda x: -abs(x[1]))
+        if len(pos) >= n:
+            return pos[:n]
+        # backfill with remaining by absolute weight (including negatives), without duplicating already selected words
+        remaining = sorted(mapped, key=lambda x: -abs(x[1]))
+        seen = set(w for w, _ in pos)
+        for w, wt in remaining:
+            if len(pos) >= n:
+                break
+            if w in seen:
+                continue
+            pos.append((w, wt))
+            seen.add(w)
+        return pos[:n]
 
-    def _take(items, n):
-        take = items[:n]
+    def _next_features(mapped, already, n):
+        if not mapped:
+            return []
+        # build ordered list by absolute weight excluding already selected words
+        already_set = set(w for w, _ in already)
+        ordered = [(w, wt) for (w, wt) in sorted(mapped, key=lambda x: -abs(x[1])) if w not in already_set]
+        # prefer positives first; if not enough, include negatives
+        positives = [(w, wt) for (w, wt) in ordered if wt > 0]
+        take = positives[:n]
         if len(take) < n:
-            take += [("—", 0.0)] * (n - len(take))
-        return take
+            for w, wt in ordered:
+                if len(take) >= n:
+                    break
+                if (w, wt) in take:
+                    continue
+                take.append((w, wt))
+        return take[:n]
 
-    top3_1 = _take(pos_1, 3)
-    next3_1 = _take(pos_1[3:], 3)
-    top3_2 = _take(pos_2, 3)
+    # If any lists are still short (e.g., very few features), pad with token strings from the document to avoid dashes
+    def _pad_with_vocab(items, indexed_list, n):
+        if len(items) >= n:
+            return items
+        if not indexed_list:
+            return items
+        # collect unique tokens from mapped list order by appearance
+        vocab_tokens = [w for (w, _) in indexed_list]
+        used = set(w for w, _ in items)
+        for w in vocab_tokens:
+            if len(items) >= n:
+                break
+            if w in used:
+                continue
+            items.append((w, 0.0))
+        return items
+
+    top3_1 = _top_features(mapped_1, 3)
+    next3_1 = _next_features(mapped_1, top3_1, 3)
+    top3_2 = _top_features(mapped_2, 3)
+
+    # Use mapped lists themselves as token sources for padding
+    top3_1 = _pad_with_vocab(top3_1, mapped_1, 3)
+    next3_1 = _pad_with_vocab(next3_1, mapped_1, 3)
+    # If mapped_2 is empty, backfill using mapped_1 tokens to avoid empty lists
+    source_for_2 = mapped_2 if mapped_2 else mapped_1
+    top3_2 = _pad_with_vocab(top3_2, source_for_2, 3)
 
     sent1 = (
         f"このインスタンスは{p0:.3f}対{p1:.3f}で{class_1}と分類されました。"
@@ -725,7 +796,10 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
 
 
 def print_lime_narrative_jp(explanation_obj, class_idx=1):
-    """日本語の説明ブロックを整形して出力します。"""
+    """
+    日本語の説明ブロックを整形して出力します。
+    Output the formatted explanatory sentences in Japanese.
+    """
     narrative = summarize_lime_explanation_jp(explanation_obj, class_idx=class_idx)
 
     print("\nLIME出力の自然言語による説明")
