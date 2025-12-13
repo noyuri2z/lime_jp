@@ -676,13 +676,11 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
     # Ensure probabilities are a 1-D numpy array
     probs = np.asarray(probs).ravel()
 
-    # class_1 は最も高い確率の予測クラス、class_2 は次点
+    # Determine the predicted class (class_1) and the runner-up (class_2)
     class_1_idx = int(np.argmax(probs))
-    # 次点のクラスを安全に選ぶ（同率や2クラスの場合も考慮）
+    
     if probs.size > 1:
-        # 降順に並べたインデックス
         order = np.argsort(probs)[::-1]
-        # 1番目は class_1、2番目があればそれを class_2 に、なければ補完
         class_2_idx = int(order[1]) if order.size > 1 else (1 - class_1_idx)
     else:
         class_2_idx = 1 - class_1_idx
@@ -693,9 +691,31 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
     p0 = float(probs[class_1_idx])
     p1 = float(probs[class_2_idx])
 
+    # --- FIX START ---
     def _get_feats(idx):
+        """
+        Retrieves features for a given class index.
+        If features for 'idx' are missing but we have features for the opposing class
+        (in a binary classification setting), we derive them by negating weights.
+        """
         try:
-            return explanation_obj.local_exp.get(idx, []) if isinstance(explanation_obj.local_exp, dict) else explanation_obj.local_exp[idx]
+            local_exp = explanation_obj.local_exp
+            # Try getting features directly
+            feats = local_exp.get(idx, []) if isinstance(local_exp, dict) else local_exp[idx]
+            if feats:
+                return feats
+            
+            # Fallback for binary cases: if target idx is missing, check for the other label
+            # If we have 2 classes, and explanations for the 'other' class exist:
+            # Weight for class A = -1 * Weight for class B
+            if class_names and len(class_names) == 2:
+                available_keys = list(local_exp.keys())
+                if len(available_keys) == 1:
+                    other_idx = available_keys[0]
+                    if other_idx != idx:
+                        # Return features with negated weights
+                        return [(fid, -weight) for fid, weight in local_exp[other_idx]]
+            return []
         except Exception:
             return []
 
@@ -703,6 +723,7 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
     feats_2 = _get_feats(class_2_idx)
 
     mapper = getattr(explanation_obj, 'domain_mapper', None)
+    
     def _map(feats):
         if not feats:
             return []
@@ -714,88 +735,62 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
     mapped_1 = _map(feats_1)
     mapped_2 = _map(feats_2)
 
-    # Prefer positively-weighted features; if insufficient, backfill with highest-absolute-weight features
-    def _top_features(mapped, n):
-        if not mapped:
+    # Helper to select top positive features, backfilling with strongest absolute weights if needed
+    def _select_features(mapped_feats, n=3, exclude_words=None):
+        if not mapped_feats:
             return []
-        pos = sorted([(w, wt) for (w, wt) in mapped if wt > 0], key=lambda x: -abs(x[1]))
-        if len(pos) >= n:
-            return pos[:n]
-        # backfill with remaining by absolute weight (including negatives), without duplicating already selected words
-        remaining = sorted(mapped, key=lambda x: -abs(x[1]))
-        seen = set(w for w, _ in pos)
-        for w, wt in remaining:
-            if len(pos) >= n:
+        if exclude_words is None:
+            exclude_words = set()
+            
+        # Filter out excluded words
+        candidates = [(w, wt) for w, wt in mapped_feats if w not in exclude_words]
+        
+        # Priority 1: Positive contributions (weights > 0)
+        positives = sorted([(w, wt) for w, wt in candidates if wt > 0], key=lambda x: -abs(x[1]))
+        
+        if len(positives) >= n:
+            return positives[:n]
+        
+        # Priority 2: Fill remainder with strongest absolute weights (could be negative)
+        # Sort all candidates by absolute weight
+        all_sorted = sorted(candidates, key=lambda x: -abs(x[1]))
+        
+        result = list(positives)
+        seen = set(w for w, _ in result)
+        
+        for w, wt in all_sorted:
+            if len(result) >= n:
                 break
-            if w in seen:
-                continue
-            pos.append((w, wt))
-            seen.add(w)
-        return pos[:n]
+            if w not in seen:
+                result.append((w, wt))
+                seen.add(w)
+                
+        return result
 
-    def _next_features(mapped, already, n):
-        if not mapped:
-            return []
-        # build ordered list by absolute weight excluding already selected words
-        already_set = set(w for w, _ in already)
-        ordered = [(w, wt) for (w, wt) in sorted(mapped, key=lambda x: -abs(x[1])) if w not in already_set]
-        # prefer positives first; if not enough, include negatives
-        positives = [(w, wt) for (w, wt) in ordered if wt > 0]
-        take = positives[:n]
-        if len(take) < n:
-            for w, wt in ordered:
-                if len(take) >= n:
-                    break
-                if (w, wt) in take:
-                    continue
-                take.append((w, wt))
-        return take[:n]
+    # Select features for the sentences
+    top3_1 = _select_features(mapped_1, n=3)
+    
+    # For "next 3", exclude words already picked in top3_1
+    exclude_for_next = set(w for w, _ in top3_1)
+    next3_1 = _select_features(mapped_1, n=3, exclude_words=exclude_for_next)
+    
+    top3_2 = _select_features(mapped_2, n=3)
 
-    # Select top features for the predicted and runner-up classes
-    top3_1 = _top_features(mapped_1, 3)
-    next3_1 = _next_features(mapped_1, top3_1, 3)
-    top3_2 = _top_features(mapped_2, 3)
-
-    # If any lists are still short (e.g., very few features), pad with token strings from the document to avoid dashes
-    def _pad_with_vocab(items, indexed_list, n):
+    # Padding helper to ensure we don't crash or show empty strings
+    def _pad_list(items, n=3):
+        # If we have enough items, just return them
         if len(items) >= n:
-            return items
-        # If we have mapped tokens, use them; otherwise, fall back to raw document tokens
-        vocab_tokens = [w for (w, _) in indexed_list] if indexed_list else []
-        if not vocab_tokens:
-            try:
-                raw_tokens = explanation_obj.domain_mapper.indexed_string.inverse_vocab
-                vocab_tokens = [t for t in raw_tokens if isinstance(t, str) and t.strip()]
-            except Exception:
-                vocab_tokens = []
-        used = set(w for w, _ in items)
-        for w in vocab_tokens:
-            if len(items) >= n:
-                break
-            if w in used:
-                continue
-            items.append((w, 0.0))
-        # If still short, pad with any non-space characters from the raw string as last resort
-        if len(items) < n:
-            try:
-                raw_chars = [ch for ch in explanation_obj.domain_mapper.indexed_string.raw_string() if not ch.isspace()]
-                for ch in raw_chars:
-                    if len(items) >= n:
-                        break
-                    if ch in used:
-                        continue
-                    items.append((ch, 0.0))
-                    used.add(ch)
-            except Exception:
-                pass
-        return items
+            return items[:n]
+            
+        # If short, pad with placeholders to avoid index errors or empty outputs
+        padded = list(items)
+        while len(padded) < n:
+            padded.append(("-", 0.0))
+        return padded
 
-    # Use mapped lists themselves as token sources for padding
-    top3_1 = _pad_with_vocab(top3_1, mapped_1, 3)
-    next3_1 = _pad_with_vocab(next3_1, mapped_1, 3)
-    # If mapped_2 is empty, backfill using mapped_1 tokens to avoid empty lists
-    source_for_2 = mapped_2 if mapped_2 else mapped_1
-    top3_2 = _pad_with_vocab(top3_2, source_for_2, 3)
+    top3_1 = _pad_list(top3_1, 3)
+    next3_1 = _pad_list(next3_1, 3)
+    top3_2 = _pad_list(top3_2, 3)
 
     sent1 = (
         f"このインスタンスは{p0:.3f}対{p1:.3f}で{class_1}と分類されました。"
@@ -811,7 +806,6 @@ def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
     )
 
     return [sent1, sent2]
-
 
 def print_lime_narrative_jp(explanation_obj, class_idx=1):
     """
