@@ -48,3 +48,36 @@ def test_explain_instance_plain_text_summary_jp():
     # Unit test for single-feature Japanese sentence
     s_jp = generate_sentence_for_feature_jp("良い", 0.12, "pos")
     assert "大きく上げました" in s_jp or "上げました" in s_jp
+
+
+def test_jp_narrative_contains_three_items_each_class():
+    clf = DummyClassifierJP()
+    explainer = LimeTextExplainer(class_names=["neg", "pos"], lang="jp")
+
+    text = "この映画は最高に良い。音楽も良い。"
+    exp = explainer.explain_instance(
+        text_instance=text,
+        classifier_fn=clf.predict_proba,
+        labels=(1,),
+        num_features=6,
+        num_samples=300,
+    )
+
+    from lime.lime_text import summarize_lime_explanation_jp
+    jp_sentences = summarize_lime_explanation_jp(exp)
+
+    # We expect two sentences
+    assert isinstance(jp_sentences, list) and len(jp_sentences) >= 2
+
+    # Sentence 1 (predicted class) should list 3 words and 3 weights
+    s1 = jp_sentences[0]
+    # It contains one weight clause with three comma-separated values
+    assert "重みは" in s1
+    assert s1.count(",") >= 2
+
+    # Sentence 2 should list 3 additional words (next3 for predicted class) and 3 for runner-up class
+    s2 = jp_sentences[1]
+    # It contains two groups of weights: 3 for next3_1 and 3 for top3_2
+    assert s2.count("重み") >= 6
+    # Ensure there are multiple comma-separated tokens mentioned (ASCII or Japanese comma)
+    assert (s2.count(",") + s2.count("、")) >= 4
