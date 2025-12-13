@@ -45,11 +45,11 @@ def test_explain_instance_plain_text_summary_jp():
     jp_sentences = summarize_lime_explanation_jp(exp, class_idx=1)
     assert isinstance(jp_sentences, list)
     assert len(jp_sentences) >= 1
-    # Overview is Japanese
-    assert "全体として" in jp_sentences[0]
+    # Overview now uses the new template
+    assert jp_sentences[0].startswith("このインスタンスは")
     # Per-feature sentence contains Japanese markers
     if len(jp_sentences) > 1:
-        assert any(tok in jp_sentences[1] for tok in ["単語", "予測確率", "重み"])  # language markers
+        assert any(tok in jp_sentences[1] for tok in ["言葉", "重み"])  # language markers
 
     # Unit test for single-feature Japanese sentence
     s_jp = generate_sentence_for_feature_jp("良い", 0.12, "pos")
