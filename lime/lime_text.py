@@ -658,30 +658,70 @@ def generate_sentence_for_feature_jp(word, weight, class_name):
 
 
 def summarize_lime_explanation_jp(explanation_obj, class_idx=1):
-    """LIMEの説明オブジェクトから日本語の要約文リストを生成します。"""
-    try:
-        exp_list = explanation_obj.as_list(label=class_idx)
-    except Exception:
-        local = explanation_obj.local_exp.get(class_idx, []) if isinstance(explanation_obj.local_exp, dict) else explanation_obj.local_exp[class_idx]
-        mapped = explanation_obj.domain_mapper.map_exp_ids(local, positions=False)
-        exp_list = mapped
-
-    sentences = []
+    """LIMEの説明オブジェクトから日本語のプレーン文を生成します。"""
+    probs = getattr(explanation_obj, 'predict_proba', None)
     class_names = getattr(explanation_obj, 'class_names', None)
-    class_name = class_names[class_idx] if class_names and class_idx < len(class_names) else str(class_idx)
+    if probs is None:
+        return ["予測確率が取得できませんでした。"]
 
-    for word, weight in exp_list:
-        sentences.append(generate_sentence_for_feature_jp(word, weight, class_name))
+    order = np.argsort(probs)
+    class_1_idx = int(order[-1])
+    class_2_idx = int(order[-2]) if len(probs) > 1 else (1 - class_1_idx)
 
-    if not exp_list:
-        return sentences
+    class_1 = class_names[class_1_idx] if class_names else str(class_1_idx)
+    class_2 = class_names[class_2_idx] if class_names else str(class_2_idx)
 
-    highest_word, highest_weight = max(exp_list, key=lambda x: abs(x[1]))
-    overview_sentence = (
-        f'全体として、単語「{highest_word}」が最も影響が大きく、重みは {highest_weight:.3f} でした。'
+    p0 = float(probs[class_1_idx])
+    p1 = float(probs[class_2_idx])
+
+    def _get_feats(idx):
+        try:
+            return explanation_obj.local_exp.get(idx, []) if isinstance(explanation_obj.local_exp, dict) else explanation_obj.local_exp[idx]
+        except Exception:
+            return []
+
+    feats_1 = _get_feats(class_1_idx)
+    feats_2 = _get_feats(class_2_idx)
+
+    mapper = getattr(explanation_obj, 'domain_mapper', None)
+    def _map(feats):
+        if not feats:
+            return []
+        try:
+            return mapper.map_exp_ids(feats, positions=False)
+        except Exception:
+            return [(str(fid), w) for fid, w in feats]
+
+    mapped_1 = _map(feats_1)
+    mapped_2 = _map(feats_2)
+
+    pos_1 = sorted([(w, wt) for (w, wt) in mapped_1 if wt > 0], key=lambda x: -abs(x[1]))
+    pos_2 = sorted([(w, wt) for (w, wt) in mapped_2 if wt > 0], key=lambda x: -abs(x[1]))
+
+    def _take(items, n):
+        take = items[:n]
+        if len(take) < n:
+            take += [("—", 0.0)] * (n - len(take))
+        return take
+
+    top3_1 = _take(pos_1, 3)
+    next3_1 = _take(pos_1[3:], 3)
+    top3_2 = _take(pos_2, 3)
+
+    sent1 = (
+        f"このインスタンスは{p0:.3f}対{p1:.3f}で{class_1}と分類されました。"
+        f"{class_1}への分類に最も強い影響を与えた言葉は{top3_1[0][0]}, {top3_1[1][0]}, {top3_1[2][0]}で、"
+        f"それぞれの重みは{top3_1[0][1]:.3f}, {top3_1[1][1]:.3f}, {top3_1[2][1]:.3f}となっています。"
     )
 
-    return [overview_sentence] + sentences
+    sent2 = (
+        f"他に{class_1}への分類の確率を上げた言葉として{next3_1[0][0]} (重み = {next3_1[0][1]:.3f})、"
+        f"{next3_1[1][0]} (重み = {next3_1[1][1]:.3f})、{next3_1[2][0]} (重み = {next3_1[2][1]:.3f})などが挙げられます。"
+        f"{class_2}への分類への確率を上げた言葉として、{top3_2[0][0]} (重み = {top3_2[0][1]:.3f})、"
+        f"{top3_2[1][0]} (重み = {top3_2[1][1]:.3f})、{top3_2[2][0]} (重み = {top3_2[2][1]:.3f})などが挙げられます。"
+    )
+
+    return [sent1, sent2]
 
 
 def print_lime_narrative_jp(explanation_obj, class_idx=1):
